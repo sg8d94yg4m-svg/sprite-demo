@@ -1,7 +1,15 @@
 // VNA sprite demo (no middleware)
 // - Canvas 2D
 // - Carrello top-down (truck_base.png) + fork overlay (fork.png) ruotabile DX/SX
-// - Routing: per cambiare corridoio il carrello esce dalla corsia, percorre una "zona esterna" (cross-aisle) e rientra nel corridoio target.
+// - Routing: per cambiare corridoio il carrello esce dalla corsia, percorre una cross-aisle e rientra nel corridoio target.
+//
+// DOPPIA CROSS-AISLE:
+// - una in TESTATA (in alto)
+// - una BASSA (in basso)
+//
+// REGOLA (come richiesto):
+// - Se il target è SOPRA la metà (posti 1..10), usa l’asse BASSA
+// - Se il target è SOTTO la metà (posti 11..20), usa l’asse in TESTATA
 //
 // MAPPING corridoio↔scaffali:
 //   Corridoio 1 → Scaffale 1 (SX) e 2 (DX)
@@ -37,15 +45,15 @@ const MAP = {
 
   // layout in pixels
   margin: {x: 110, y: 70},
-  aisleGap: 150,     // distanza tra centri corridoio
-  laneWidth: 46,     // corsia stretta
-  shelfDepth: 60,    // profondità scaffali (uno per lato)
-  posGap: 26,        // distanza tra posti lungo corsia
+  aisleGap: 150,
+  laneWidth: 46,
+  shelfDepth: 60,
+  posGap: 26,
   topY: 90,
 
-  // zona esterna / cross-aisle
+  // cross-aisle
   crossAisleHeight: 70,
-  crossAislePadding: 20,
+  crossAislePadding: 22,
 };
 
 // Sprites
@@ -73,7 +81,10 @@ function aisleCenterX(corridoio){
 function posY(posto){
   return MAP.topY + (posto - 1) * MAP.posGap;
 }
-function crossAisleY(){
+function crossAisleYTop(){
+  return MAP.topY - MAP.crossAislePadding - MAP.crossAisleHeight/2;
+}
+function crossAisleYBottom(){
   return MAP.topY + (MAP.positions - 1) * MAP.posGap + MAP.crossAislePadding + MAP.crossAisleHeight/2;
 }
 function shelfOffsetX(side){
@@ -85,9 +96,9 @@ function shelfOffsetX(side){
 const trolley = {
   x: aisleCenterX(1),
   y: posY(1),
-  headingDeg: 0,      // 0 su, 90 dx, 180 giù, 270 sx
-  forkRelDeg: 90,     // default verso DX
-  speed: 220,         // px/sec
+  headingDeg: 0,
+  forkRelDeg: 90,
+  speed: 220,
 };
 
 // Target
@@ -118,7 +129,6 @@ ui.btnVai.onclick = () => {
   const pos = clamp(parseInt(ui.posto.value || '1', 10), 1, 20);
   const liv = clamp(parseInt(ui.livello.value || '1', 10), 1, 5);
 
-  // Corridoio allineato al mapping scaffale->corridoio
   ui.corridoio.value = String(corrDerived);
 
   target.active = true;
@@ -134,6 +144,14 @@ ui.btnVai.onclick = () => {
   moving = true;
 };
 
+function chooseCrossYForTarget(){
+  const half = MAP.positions / 2; // 10
+  // Regola richiesta:
+  // sopra la metà -> asse bassa
+  // sotto la metà -> asse testata
+  return (target.posto <= half) ? crossAisleYBottom() : crossAisleYTop();
+}
+
 function buildPathToTarget(){
   const cxNow = trolley.x;
   const sameCorridor = Math.abs(cxNow - target.x) < 1.0;
@@ -143,7 +161,7 @@ function buildPathToTarget(){
     return;
   }
 
-  const yCross = crossAisleY();
+  const yCross = chooseCrossYForTarget();
   waypoints = [
     {x: cxNow,    y: yCross},
     {x: target.x, y: yCross},
@@ -218,31 +236,35 @@ function draw(){
   drawTrolley();
 }
 
-function drawWarehouse(){
-  const yCross = crossAisleY();
-
-  // Cross-aisle esterna
+function drawCrossAisle(yCenter, label){
   const leftEdge = aisleCenterX(1) - (MAP.laneWidth/2 + MAP.shelfDepth + 40);
   const rightEdge = aisleCenterX(MAP.corridors) + (MAP.laneWidth/2 + MAP.shelfDepth + 40);
-  const crossTop = yCross - MAP.crossAisleHeight/2;
+  const top = yCenter - MAP.crossAisleHeight/2;
 
   ctx.save();
   ctx.fillStyle = '#ffffff';
   ctx.strokeStyle = '#d0d0d0';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(leftEdge, crossTop, rightEdge-leftEdge, MAP.crossAisleHeight, 14);
+  ctx.roundRect(leftEdge, top, rightEdge-leftEdge, MAP.crossAisleHeight, 14);
   ctx.fill();
   ctx.stroke();
+
   ctx.fillStyle = '#666';
   ctx.font = '12px system-ui, sans-serif';
-  ctx.fillText('ZONA ESTERNA / CROSS-AISLE', leftEdge + 12, crossTop + 22);
+  ctx.fillText(label, leftEdge + 12, top + 22);
   ctx.restore();
+}
+
+function drawWarehouse(){
+  // Cross-aisles: top + bottom
+  drawCrossAisle(crossAisleYTop(), 'CROSS-AISLE TESTATA (ALTA)');
+  drawCrossAisle(crossAisleYBottom(), 'CROSS-AISLE BASSA');
 
   for (let c = 1; c <= MAP.corridors; c++){
     const cx = aisleCenterX(c);
 
-    // corsia stretta
+    // corsia
     ctx.save();
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#d0d0d0';
@@ -253,7 +275,7 @@ function drawWarehouse(){
     ctx.stroke();
     ctx.restore();
 
-    // scaffali continui legati al corridoio (solo 2: SX e DX)
+    // scaffali continui (SX/DX)
     for (const side of ['left','right']){
       const sx = cx + shelfOffsetX(side) - MAP.shelfDepth/2;
       const sy = MAP.topY - 22;
@@ -266,7 +288,7 @@ function drawWarehouse(){
       ctx.restore();
     }
 
-    // label corridoio e scaffali associati
+    // label
     const shelfL = (c*2)-1;
     const shelfR = (c*2);
     ctx.save();
@@ -311,10 +333,8 @@ function drawTrolley(){
     return;
   }
 
-  // body
   drawImageCentered(sprites.truck, trolley.x, trolley.y, bodyW, bodyH, trolley.headingDeg);
 
-  // fork overlay
   const ang = degToRad(trolley.headingDeg);
   const fx = trolley.x + Math.sin(ang) * (bodyH*0.34);
   const fy = trolley.y - Math.cos(ang) * (bodyH*0.34);

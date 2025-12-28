@@ -2,12 +2,15 @@
 
 Apri `index.html` in un browser.
 
-## Cambi richiesti (implementati)
-### Movimento
-- Se il carrello deve cambiare corridoio, **esce dalla corsia**, percorre una **zona esterna (cross-aisle)** e rientra nel corridoio target.
-- Se rimane nello stesso corridoio, si muove direttamente lungo il corridoio.
+## Doppia cross-aisle (implementato)
+- **Cross-aisle in testata (alta)**: sopra il posto 1
+- **Cross-aisle bassa**: sotto il posto 20
 
-### Mapping corridoi ↔ scaffali
+### Regola di scelta cross-aisle (come richiesto)
+- Se il target è **sopra la metà** (posti 1–10) → usa **asse bassa**
+- Se il target è **sotto la metà** (posti 11–20) → usa **asse in testata**
+
+## Mapping corridoi ↔ scaffali
 - Corridoio 1 → Scaffale 1 (SX) e 2 (DX)
 - Corridoio 2 → Scaffale 3 (SX) e 4 (DX)
 - ...
@@ -17,9 +20,6 @@ Lo **Scaffale** determina automaticamente:
 - Corridoio = ceil(Scaffale/2)
 - Lato = dispari→SX, pari→DX
 
-### UI
-- Rimosso pulsante **Centro** delle forche: restano solo **Ruota SX** e **Ruota DX**.
-
 ## Assets
-- `assets/truck_base.png` : sprite top-down del carrello (base).
+- `assets/truck_base.png` : sprite top-down del carrello.
 - `assets/fork.png` : sprite forche (overlay) ruotabile DX/SX.
