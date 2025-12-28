@@ -1,13 +1,18 @@
-// VNA sprite demo (no middleware)
-// - Canvas 2D
-// - Carrello top-down (truck_base.png) + fork overlay (fork.png) ruotabile DX/SX
-// - Routing: per cambiare corridoio il carrello esce dalla corsia, percorre una "zona esterna" (cross-aisle) e rientra nel corridoio target.
+// VNA sprite demo — 2,5D (no middleware)
+// Obiettivo: mantenere la mappa 2D “top-down” ma rendere scaffali e livelli in 2,5D (estrusione).
+// - Scaffali: prismi estrusi con 5 livelli (MAP.levels) e tacche livello.
+// - Target livello: evidenziato sullo scaffale target.
+// - Carrello: sprite 2D + “alzata” (mast) come indicatore verticale 2,5D.
 //
-// MAPPING corridoio↔scaffali:
-//   Corridoio 1 → Scaffale 1 (SX) e 2 (DX)
-//   Corridoio 2 → Scaffale 3 (SX) e 4 (DX)
-//   ...
-//   Corridoio 6 → Scaffale 11 (SX) e 12 (DX)
+// DOPPIA CROSS-AISLE:
+// - una in TESTATA (in alto)
+// - una BASSA (in basso)
+// REGOLA:
+// - target sopra la metà (posti 1..10) -> asse bassa
+// - target sotto la metà (posti 11..20) -> asse testata
+//
+// Mapping corridoio↔scaffali:
+// Corridoio 1 -> S1 (SX) / S2 (DX) ... Corridoio 6 -> S11 (SX) / S12 (DX)
 
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
@@ -29,23 +34,28 @@ const ui = {
 
 function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
 function degToRad(d){ return d * Math.PI / 180; }
+function lerp(a,b,t){ return a + (b-a)*t; }
 
 const MAP = {
   corridors: 6,
   positions: 20,
   levels: 5,
 
-  // layout in pixels
-  margin: {x: 110, y: 70},
-  aisleGap: 150,     // distanza tra centri corridoio
-  laneWidth: 46,     // corsia stretta
-  shelfDepth: 60,    // profondità scaffali (uno per lato)
-  posGap: 26,        // distanza tra posti lungo corsia
-  topY: 90,
+  margin: {x: 110, y: 88},
+  aisleGap: 150,
+  laneWidth: 46,
+  shelfDepth: 66,
+  posGap: 26,
+  topY: 120,
 
-  // zona esterna / cross-aisle
   crossAisleHeight: 70,
-  crossAislePadding: 20,
+  crossAislePadding: 22,
+
+  // 2,5D params
+  prismDx: -14,        // “profondità” verso alto-sinistra
+  prismDy: -10,
+  levelHeightPx: 14,   // altezza “verticale” di ogni livello
+  prismTopLift: 0,     // extra lift (opzionale)
 };
 
 // Sprites
@@ -63,17 +73,20 @@ let loadCount = 0;
   img.onerror = () => console.warn('Errore caricamento sprite:', img.src);
 });
 
-// Helpers: mapping shelf -> corridor/side
+// Mapping helpers
 function corridorFromShelf(scaffale){ return Math.ceil(scaffale / 2); }
 function shelfSideFromShelf(scaffale){ return (scaffale % 2 === 1) ? 'left' : 'right'; }
 
-function aisleCenterX(corridoio){
-  return MAP.margin.x + (corridoio - 1) * MAP.aisleGap;
+function aisleCenterX(c){
+  return MAP.margin.x + (c - 1) * MAP.aisleGap;
 }
-function posY(posto){
-  return MAP.topY + (posto - 1) * MAP.posGap;
+function posY(p){
+  return MAP.topY + (p - 1) * MAP.posGap;
 }
-function crossAisleY(){
+function crossAisleYTop(){
+  return MAP.topY - MAP.crossAislePadding - MAP.crossAisleHeight/2;
+}
+function crossAisleYBottom(){
   return MAP.topY + (MAP.positions - 1) * MAP.posGap + MAP.crossAislePadding + MAP.crossAisleHeight/2;
 }
 function shelfOffsetX(side){
@@ -81,16 +94,15 @@ function shelfOffsetX(side){
   return sign * (MAP.laneWidth/2 + MAP.shelfDepth/2);
 }
 
-// State: trolley
+// State
 const trolley = {
   x: aisleCenterX(1),
   y: posY(1),
-  headingDeg: 0,      // 0 su, 90 dx, 180 giù, 270 sx
-  forkRelDeg: 90,     // default verso DX
-  speed: 220,         // px/sec
+  headingDeg: 0,
+  forkRelDeg: 90,
+  speed: 220,
 };
 
-// Target
 const target = {
   active: false,
   x: 0, y: 0,
@@ -104,10 +116,9 @@ const target = {
 let waypoints = [];
 let moving = false;
 
-// UI events
+// UI
 ui.btnForkLeft.onclick = () => trolley.forkRelDeg = -90;
 ui.btnForkRight.onclick = () => trolley.forkRelDeg = 90;
-
 ui.btnStop.onclick = () => { moving = false; waypoints = []; };
 
 ui.btnVai.onclick = () => {
@@ -118,7 +129,6 @@ ui.btnVai.onclick = () => {
   const pos = clamp(parseInt(ui.posto.value || '1', 10), 1, 20);
   const liv = clamp(parseInt(ui.livello.value || '1', 10), 1, 5);
 
-  // Corridoio allineato al mapping scaffale->corridoio
   ui.corridoio.value = String(corrDerived);
 
   target.active = true;
@@ -134,6 +144,11 @@ ui.btnVai.onclick = () => {
   moving = true;
 };
 
+function chooseCrossYForTarget(){
+  const half = MAP.positions / 2; // 10
+  return (target.posto <= half) ? crossAisleYBottom() : crossAisleYTop();
+}
+
 function buildPathToTarget(){
   const cxNow = trolley.x;
   const sameCorridor = Math.abs(cxNow - target.x) < 1.0;
@@ -143,7 +158,7 @@ function buildPathToTarget(){
     return;
   }
 
-  const yCross = crossAisleY();
+  const yCross = chooseCrossYForTarget();
   waypoints = [
     {x: cxNow,    y: yCross},
     {x: target.x, y: yCross},
@@ -154,6 +169,100 @@ function buildPathToTarget(){
 function setHeadingToward(dx, dy){
   if (Math.abs(dx) > Math.abs(dy)) trolley.headingDeg = dx > 0 ? 90 : 270;
   else trolley.headingDeg = dy > 0 ? 180 : 0;
+}
+
+// 2,5D drawing primitives
+function prismHeight(){ return MAP.levels * MAP.levelHeightPx + MAP.prismTopLift; }
+
+function drawPrism(x, y, w, h, height, fillFront, fillSide, fillTop, alpha=0.70){
+  const dx = MAP.prismDx, dy = MAP.prismDy;
+  // top face is shifted by (dx,dy) and lifted by height (up)
+  const tx = x + dx;
+  const ty = y + dy - height;
+
+  // FRONT face (vertical): base rect + height up (we draw as polygon for 2.5D)
+  // We'll represent the “front” as the near face (toward viewer): it’s the base rectangle extruded up.
+  // In oblique projection: front face is a quad along one edge. For simplicity we draw:
+  // 1) top face polygon
+  // 2) side face polygon
+  // 3) front-ish face polygon (base “wall”)
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // Side face (right)
+  ctx.fillStyle = fillSide;
+  ctx.beginPath();
+  ctx.moveTo(x+w, y);
+  ctx.lineTo(tx+w, ty+height);       // note: ty already includes -height, so ty+height is y+dy
+  ctx.lineTo(tx+w, ty);
+  ctx.lineTo(x+w, y-height);
+  ctx.closePath();
+  ctx.fill();
+
+  // Front face (bottom edge)
+  ctx.fillStyle = fillFront;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x+w, y);
+  ctx.lineTo(x+w, y-height);
+  ctx.lineTo(x, y-height);
+  ctx.closePath();
+  ctx.fill();
+
+  // Top face
+  ctx.fillStyle = fillTop;
+  ctx.beginPath();
+  ctx.moveTo(x, y-height);
+  ctx.lineTo(x+w, y-height);
+  ctx.lineTo(tx+w, ty);
+  ctx.lineTo(tx, ty);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+
+  // Outline (subtle)
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  ctx.strokeStyle = '#4a4a4a';
+  ctx.lineWidth = 1;
+  // outline top
+  ctx.beginPath();
+  ctx.moveTo(x, y-height);
+  ctx.lineTo(x+w, y-height);
+  ctx.lineTo(tx+w, ty);
+  ctx.lineTo(tx, ty);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawLevelTicksOnShelf(x, y, w, height){
+  // ticks on the front face: horizontal lines at each level
+  ctx.save();
+  ctx.globalAlpha = 0.22;
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  for (let l=1; l<MAP.levels; l++){
+    const yy = y - l*MAP.levelHeightPx;
+    ctx.beginPath();
+    ctx.moveTo(x, yy);
+    ctx.lineTo(x+w, yy);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function highlightShelfLevel(x, y, w, level){
+  // highlight on the front face between (level-1) and level
+  const top = y - level*MAP.levelHeightPx;
+  const bottom = y - (level-1)*MAP.levelHeightPx;
+  ctx.save();
+  ctx.globalAlpha = 0.28;
+  ctx.fillStyle = '#1a7f37';
+  ctx.fillRect(x, top, w, bottom-top);
+  ctx.restore();
 }
 
 // Update loop
@@ -169,10 +278,8 @@ function tick(ts){
     const dist = Math.hypot(dx, dy);
 
     if (dist < 2){
-      trolley.x = wp.x;
-      trolley.y = wp.y;
+      noteArrive(wp);
       waypoints.shift();
-
       if (!waypoints.length){
         moving = false;
         trolley.forkRelDeg = (target.side === 'left') ? -90 : 90;
@@ -190,92 +297,104 @@ function tick(ts){
   requestAnimationFrame(tick);
 }
 
+function noteArrive(_wp){
+  // placeholder for future behaviors
+}
+
 function draw(){
   ctx.clearRect(0, 0, cv.width, cv.height);
   ctx.fillStyle = '#f6f6f6';
   ctx.fillRect(0, 0, cv.width, cv.height);
 
-  drawWarehouse();
-
-  if (target.active){
-    ctx.save();
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = '#1a7f37';
-    ctx.beginPath();
-    ctx.arc(target.x, target.y, 8, 0, Math.PI*2);
-    ctx.fill();
-    ctx.restore();
-
-    const sx = target.x + shelfOffsetX(target.side);
-    const sy = target.y;
-    ctx.save();
-    ctx.strokeStyle = '#1a7f37';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(sx - MAP.shelfDepth/2, sy - 12, MAP.shelfDepth, 24);
-    ctx.restore();
-  }
-
-  drawTrolley();
+  drawWarehouse25D();
+  if (target.active) drawTargetOverlay();
+  drawTrolley25D();
 }
 
-function drawWarehouse(){
-  const yCross = crossAisleY();
-
-  // Cross-aisle esterna
+function drawCrossAisle2D(yCenter, label){
   const leftEdge = aisleCenterX(1) - (MAP.laneWidth/2 + MAP.shelfDepth + 40);
   const rightEdge = aisleCenterX(MAP.corridors) + (MAP.laneWidth/2 + MAP.shelfDepth + 40);
-  const crossTop = yCross - MAP.crossAisleHeight/2;
+  const top = yCenter - MAP.crossAisleHeight/2;
 
   ctx.save();
   ctx.fillStyle = '#ffffff';
   ctx.strokeStyle = '#d0d0d0';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(leftEdge, crossTop, rightEdge-leftEdge, MAP.crossAisleHeight, 14);
+  ctx.roundRect(leftEdge, top, rightEdge-leftEdge, MAP.crossAisleHeight, 14);
   ctx.fill();
   ctx.stroke();
   ctx.fillStyle = '#666';
   ctx.font = '12px system-ui, sans-serif';
-  ctx.fillText('ZONA ESTERNA / CROSS-AISLE', leftEdge + 12, crossTop + 22);
+  ctx.fillText(label, leftEdge + 12, top + 22);
   ctx.restore();
+}
 
-  for (let c = 1; c <= MAP.corridors; c++){
+function drawWarehouse25D(){
+  // Cross-aisles (2D)
+  drawCrossAisle2D(crossAisleYTop(), 'CROSS-AISLE TESTATA (ALTA)');
+  drawCrossAisle2D(crossAisleYBottom(), 'CROSS-AISLE BASSA');
+
+  const shelfH = MAP.posGap*(MAP.positions-1) + 44;
+  const shelfY = MAP.topY - 22;
+
+  for (let c=1; c<=MAP.corridors; c++){
     const cx = aisleCenterX(c);
 
-    // corsia stretta
+    // lane (2D)
     ctx.save();
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#d0d0d0';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.roundRect(cx - MAP.laneWidth/2, MAP.topY - 22, MAP.laneWidth, MAP.posGap*(MAP.positions-1) + 44, 12);
+    ctx.roundRect(cx - MAP.laneWidth/2, MAP.topY - 22, MAP.laneWidth, shelfH, 12);
     ctx.fill();
     ctx.stroke();
     ctx.restore();
 
-    // scaffali continui legati al corridoio (solo 2: SX e DX)
+    // shelves (2,5D prisms)
     for (const side of ['left','right']){
       const sx = cx + shelfOffsetX(side) - MAP.shelfDepth/2;
-      const sy = MAP.topY - 22;
-      const h = MAP.posGap*(MAP.positions-1) + 44;
+      const sy = shelfY + shelfH; // base y at bottom of shelf for prism drawing
+      const w = MAP.shelfDepth;
+      const h = shelfH; // footprint height on y-axis
 
-      ctx.save();
-      ctx.fillStyle = '#7a7a7a';
-      ctx.globalAlpha = 0.70;
-      ctx.fillRect(sx, sy, MAP.shelfDepth, h);
-      ctx.restore();
+      const H = prismHeight();
+      const fillFront = '#808080';
+      const fillSide  = '#6f6f6f';
+      const fillTop   = '#8d8d8d';
+
+      // Draw prism “standing” on the shelf footprint:
+      // We use x = sx, y = sy (bottom), w = width, h = 0 is not used (we extrude along vertical)
+      // But we want the prism to extend along the corridor (upwards in screen y). So we interpret:
+      // - x: shelf left
+      // - y: bottom (shelfY + shelfH)
+      // - w: shelfDepth
+      // - h: 0 (not used), and we draw the front face as the depth only, while the shelf length is drawn separately.
+      //
+      // Instead: draw multiple prisms segments to suggest the length (cheap & readable).
+      const segments = 6;
+      for (let i=0;i<segments;i++){
+        const segTop = shelfY + (i/segments)*shelfH;
+        const segBot = shelfY + ((i+1)/segments)*shelfH;
+        const segY = segBot;             // bottom anchor
+        const segHeightFoot = segBot - segTop;
+        // make segment a small “block” (w x segHeightFoot) extruded by H
+        drawPrism(sx, segY, w, segHeightFoot, H, fillFront, fillSide, fillTop, 0.62);
+        drawLevelTicksOnShelf(sx, segY, w, H);
+      }
     }
 
-    // label corridoio e scaffali associati
+    // labels
     const shelfL = (c*2)-1;
     const shelfR = (c*2);
     ctx.save();
     ctx.fillStyle = '#333';
     ctx.font = '12px system-ui, sans-serif';
-    ctx.fillText(`C${c}`, cx - 10, MAP.topY - 34);
+    ctx.fillText(`C${c}`, cx - 10, MAP.topY - 36);
     ctx.fillStyle = '#555';
     ctx.font = '11px system-ui, sans-serif';
-    ctx.fillText(`S${shelfL} / S${shelfR}`, cx - 24, MAP.topY - 18);
+    ctx.fillText(`S${shelfL} / S${shelfR}`, cx - 24, MAP.topY - 20);
     ctx.restore();
   }
 
@@ -283,9 +402,52 @@ function drawWarehouse(){
   ctx.save();
   ctx.fillStyle = '#9a9a9a';
   ctx.font = '11px system-ui, sans-serif';
-  for (let p = 1; p <= MAP.positions; p += 2){
+  for (let p=1; p<=MAP.positions; p+=2){
     ctx.fillText(`${p}`, 22, posY(p) + 4);
   }
+  ctx.restore();
+}
+
+function drawTargetOverlay(){
+  // Center target marker
+  ctx.save();
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = '#1a7f37';
+  ctx.beginPath();
+  ctx.arc(target.x, target.y, 8, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  // Highlight shelf block at target position and level
+  const sx = target.x + shelfOffsetX(target.side) - MAP.shelfDepth/2;
+  const sy = target.y + 12; // bottom anchor for one block at this posto
+  const w = MAP.shelfDepth;
+  const H = prismHeight();
+
+  // block height footprint representing “one posto”
+  const blockFoot = MAP.posGap; 
+  const yBottom = target.y + blockFoot/2;
+
+  // highlight segment on front face
+  highlightShelfLevel(sx, yBottom, w, target.livello);
+
+  // Outline target block
+  ctx.save();
+  ctx.strokeStyle = '#1a7f37';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(sx - 2, target.y - blockFoot/2 - H - 2, w + 4, blockFoot + H + 4);
+  ctx.restore();
+
+  // Show which cross-aisle chosen (dashed guide)
+  const yCross = chooseCrossYForTarget();
+  ctx.save();
+  ctx.strokeStyle = '#1a7f37';
+  ctx.setLineDash([6,6]);
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(target.x, yCross);
+  ctx.lineTo(target.x, target.y);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -297,24 +459,32 @@ function drawImageCentered(img, x, y, w, h, rotDeg){
   ctx.restore();
 }
 
-function drawTrolley(){
+function drawTrolley25D(){
+  // Shadow
+  ctx.save();
+  ctx.globalAlpha = 0.20;
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.ellipse(trolley.x + 10, trolley.y + 18, 34, 18, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  // Sprite body
   const bodyW = 150;
   const bodyH = 190;
 
-  if (!sprites.loaded){
+  if (sprites.loaded){
+    drawImageCentered(sprites.truck, trolley.x, trolley.y, bodyW, bodyH, trolley.headingDeg);
+  } else {
     ctx.save();
     ctx.fillStyle = '#d40000';
     ctx.beginPath();
     ctx.arc(trolley.x, trolley.y, 10, 0, Math.PI*2);
     ctx.fill();
     ctx.restore();
-    return;
   }
 
-  // body
-  drawImageCentered(sprites.truck, trolley.x, trolley.y, bodyW, bodyH, trolley.headingDeg);
-
-  // fork overlay
+  // Fork overlay
   const ang = degToRad(trolley.headingDeg);
   const fx = trolley.x + Math.sin(ang) * (bodyH*0.34);
   const fy = trolley.y - Math.cos(ang) * (bodyH*0.34);
@@ -323,7 +493,23 @@ function drawTrolley(){
   const forkH = 220;
   const totalForkDeg = trolley.headingDeg + trolley.forkRelDeg;
 
-  drawImageCentered(sprites.fork, fx, fy, forkW, forkH, totalForkDeg);
+  if (sprites.loaded){
+    drawImageCentered(sprites.fork, fx, fy, forkW, forkH, totalForkDeg);
+  }
+
+  // Lift indicator (2,5D): a vertical mast line rising based on target livello when target active,
+  // otherwise small idle.
+  const level = target.active ? target.livello : 1;
+  const lift = lerp(10, MAP.levels*MAP.levelHeightPx, (level-1)/(MAP.levels-1));
+  ctx.save();
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 4;
+  ctx.globalAlpha = 0.65;
+  ctx.beginPath();
+  ctx.moveTo(fx, fy);
+  ctx.lineTo(fx + MAP.prismDx*0.6, fy + MAP.prismDy*0.6 - lift);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function debug(){
@@ -350,4 +536,43 @@ if (!CanvasRenderingContext2D.prototype.roundRect) {
   }
 }
 
-requestAnimationFrame(tick);
+let lastTs = performance.now();
+requestAnimationFrame(function tick(ts){
+  // delegate to global tick function above
+  // (we reuse the name tick, so wrap carefully)
+});
+
+// Start loop
+(function start(){
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+
+    if (moving && waypoints.length){
+      const wp = waypoints[0];
+      const dx = wp.x - trolley.x;
+      const dy = wp.y - trolley.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist < 2){
+        trolley.x = wp.x; trolley.y = wp.y;
+        waypoints.shift();
+        if (!waypoints.length){
+          moving = false;
+          trolley.forkRelDeg = (target.side === 'left') ? -90 : 90;
+        }
+      } else {
+        setHeadingToward(dx, dy);
+        const step = trolley.speed * dt;
+        trolley.x += (dx / dist) * Math.min(step, dist);
+        trolley.y += (dy / dist) * Math.min(step, dist);
+      }
+    }
+
+    draw();
+    debug();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
