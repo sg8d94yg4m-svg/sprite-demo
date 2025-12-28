@@ -1,32 +1,39 @@
-# VNA sprite demo (2D) + Missioni via REST/WS
+# VNA sprite demo (2D) — Codespaces
 
-## Avvio (consigliato anche per iPhone)
-Avvia il server:
+## Avvio
+In Codespaces:
 ```bash
 python3 server.py
 ```
 
-Apri:
-- PC: http://localhost:8080/
-- iPhone (stessa Wi‑Fi): http://IP_DEL_PC:8080/
+Poi vai nella tab **Ports**:
+- porta **8080**
+- metti **Visibility: Public**
+- apri l’URL (tipo `https://<id>-8080.app.github.dev`)
 
-## Missioni (per ora: passivo)
-Formato: scaffale-posto-livello-missione (missione 1..3)
-- 1 prelievo bancale
-- 2 deposito bancale (futuro: solo se il carrello ha già un bancale)
-- 3 picking (futuro: affiancamento cabina con offset in base al verso di entrata)
+## Endpoint richiesto
+- **POST /setMissione**
+  - JSON: `{"scaffale":4,"posto":12,"livello":1,"missione":2}`
+  - oppure stringa: `"4-12-1-2"`
 
-### Invia via REST
-JSON:
+Esempio (da terminale Codespaces):
 ```bash
-curl -X POST http://localhost:8080/mission -H "Content-Type: application/json" \
-  -d '{"scaffale":4,"posto":12,"livello":1,"missione":2}'
+curl -X POST "http://localhost:8080/setMissione" -H "Content-Type: text/plain" -d "4-12-1-2"
 ```
-Stringa:
+
+Da fuori (usando l’URL pubblico della porta 8080):
 ```bash
-curl -X POST http://localhost:8080/mission -H "Content-Type: text/plain" -d "4-12-1-2"
+curl -X POST "https://<id>-8080.app.github.dev/setMissione" -H "Content-Type: text/plain" -d "4-12-1-2"
 ```
+
+## Fallback
+Se WS non funziona, la pagina usa:
+- **GET /checkMissione** (polling)
 
 ## Note
-- Carrello rallentato di 1,5x.
-- Pre-stoccaggi in testata: 1 per corsia, solo livello 1 (a terra), per ora solo disegnati.
+- Carrello rallentato di **1,5x**
+- Pre-stoccaggi in testata: 1 per corsia, solo livello 1 (per ora solo disegnati)
+
+
+## Simulatore missioni in pagina
+C'è una sezione **Simulatore missioni** che invia direttamente `POST /setMissione` (utile su mobile senza cURL).

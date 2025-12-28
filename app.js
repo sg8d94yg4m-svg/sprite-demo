@@ -1,8 +1,7 @@
-// VNA sprite demo (2D) + Missioni via REST/WS (passivo per ora)
-// - Carrello rallentato di 1,5x
-// - Doppia cross-aisle + regola (posti 1..10 -> bassa, 11..20 -> testata)
-// - Pre-stoccaggi in testata (1 per corsia, livello 1) per ora solo disegnati
-// - Missione: "scaffale-posto-livello-missione" (1..3), ricevuta via WS/REST e applicata al target
+// VNA sprite demo (2D) — Codespaces
+// Missioni: endpoint richiesto POST /setMissione
+// Fallback: GET /checkMissione (polling)
+// WS: /ws (se disponibile)
 
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
@@ -46,6 +45,7 @@ const MAP = {
   prestockOffsetY: 0,
 };
 
+// Sprites
 const sprites = { truck: new Image(), fork: new Image(), loaded: false };
 sprites.truck.src = 'assets/truck_base.png';
 sprites.fork.src = 'assets/fork.png';
@@ -55,6 +55,7 @@ let loadCount = 0;
   img.onerror = () => console.warn('Errore caricamento sprite:', img.src);
 });
 
+// Helpers
 function corridorFromShelf(s){ return Math.ceil(s / 2); }
 function shelfSideFromShelf(s){ return (s % 2 === 1) ? 'left' : 'right'; }
 function aisleCenterX(c){ return MAP.margin.x + (c - 1) * MAP.aisleGap; }
@@ -71,69 +72,65 @@ function prestockRect(c){
   return {x, y, w: MAP.prestockW, h: MAP.prestockH};
 }
 
-const mission = { code: 1, lastRaw: '' };
+// Mission state
+const mission = { code: 1, lastRaw: '', lastSeq: 0 };
 
+// Trolley
 const trolley = {
   x: aisleCenterX(1),
   y: posY(1),
   headingDeg: 0,
   forkRelDeg: 90,
-  speed: 220 / 1.5,
+  speed: 220 / 1.5, // rallentato di 1,5x
 };
 
-const target = {
-  active: false, x: 0, y: 0,
-  corridoio: 1, posto: 1, livello: 1, scaffale: 1, side: 'right',
-};
-
+const target = { active:false, x:0, y:0, corridoio:1, posto:1, livello:1, scaffale:1, side:'right' };
 let waypoints = [];
 let moving = false;
 
+// UI
 ui.btnForkLeft.onclick = () => trolley.forkRelDeg = -90;
 ui.btnForkRight.onclick = () => trolley.forkRelDeg = 90;
 ui.btnStop.onclick = () => { moving = false; waypoints = []; };
 
-ui.btnVai.onclick = () => {
+ui.btnVai.onclick = async () => {
   const sca = clamp(parseInt(ui.scaffale.value || '1', 10), 1, 12);
   const pos = clamp(parseInt(ui.posto.value || '1', 10), 1, 20);
   const liv = clamp(parseInt(ui.livello.value || '1', 10), 1, 5);
   const mis = clamp(parseInt(ui.missione.value || '1', 10), 1, 3);
+
+  // Applica in locale e invia al server /setMissione (se attivo)
   applyMission({scaffale: sca, posto: pos, livello: liv, missione: mis, raw: 'manual'});
+  try{ await fetch('/setMissione', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({scaffale:sca, posto:pos, livello:liv, missione:mis})}); }catch(_e){}
 };
 
+// Routing
 function chooseCrossYForTarget(){
   const half = MAP.positions / 2;
   return (target.posto <= half) ? crossAisleYBottom() : crossAisleYTop();
 }
-
 function buildPathToTarget(){
   const cxNow = trolley.x;
-  const sameCorridor = Math.abs(cxNow - target.x) < 1.0;
-  if (sameCorridor){ waypoints = [{x: target.x, y: target.y}]; return; }
+  const same = Math.abs(cxNow - target.x) < 1.0;
+  if (same){ waypoints = [{x:target.x, y:target.y}]; return; }
   const yCross = chooseCrossYForTarget();
-  waypoints = [{x: cxNow, y: yCross},{x: target.x, y: yCross},{x: target.x, y: target.y}];
+  waypoints = [{x:cxNow, y:yCross},{x:target.x, y:yCross},{x:target.x, y:target.y}];
 }
-
 function setHeadingToward(dx, dy){
   if (Math.abs(dx) > Math.abs(dy)) trolley.headingDeg = dx > 0 ? 90 : 270;
   else trolley.headingDeg = dy > 0 ? 180 : 0;
 }
 
-function parseMissionString(s){
-  const m = String(s).trim().match(/^(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s*$/);
-  if (!m) return null;
-  return {scaffale:+m[1], posto:+m[2], livello:+m[3], missione:+m[4], raw:String(s).trim()};
-}
-
+// Mission handling
 function applyMission(obj){
   if (!obj) return;
   const sca = clamp(parseInt(obj.scaffale,10), 1, 12);
   const pos = clamp(parseInt(obj.posto,10), 1, 20);
   const liv = clamp(parseInt(obj.livello,10), 1, 5);
   const mis = clamp(parseInt(obj.missione,10), 1, 3);
-
   mission.code = mis;
   mission.lastRaw = obj.raw || `${sca}-${pos}-${liv}-${mis}`;
+  if (obj.seq) mission.lastSeq = Math.max(mission.lastSeq, parseInt(obj.seq,10));
 
   ui.scaffale.value = String(sca);
   ui.posto.value = String(pos);
@@ -157,34 +154,49 @@ function applyMission(obj){
   moving = true;
 }
 
-// WS client
+// WS preferred, polling fallback
+let wsOk = false;
+ui.dbgServer.textContent = 'Endpoint: /setMissione';
+
 function wsUrl(){
   const proto = (location.protocol === 'https:') ? 'wss:' : 'ws:';
-  const host = location.host || 'localhost:8080';
-  return `${proto}//${host}/ws`;
+  return `${proto}//${location.host}/ws`;
 }
-function connectWS(){
-  try {
-    ui.dbgServer.textContent = 'WS connecting…';
+
+function startWS(){
+  try{
     const ws = new WebSocket(wsUrl());
-    ws.onopen = () => ui.dbgServer.textContent = 'WS connected';
-    ws.onclose = () => ui.dbgServer.textContent = 'WS disconnected';
-    ws.onerror = () => ui.dbgServer.textContent = 'WS error';
+    ws.onopen = () => { wsOk = true; ui.dbgServer.textContent = 'Endpoint: /setMissione • WS ok'; };
+    ws.onclose = () => { wsOk = false; ui.dbgServer.textContent = 'Endpoint: /setMissione • WS closed (polling)'; };
+    ws.onerror = () => { wsOk = false; ui.dbgServer.textContent = 'Endpoint: /setMissione • WS error (polling)'; };
     ws.onmessage = (ev) => {
-      try {
+      try{
         const data = JSON.parse(ev.data);
         if (data && data.scaffale) applyMission({...data, raw: ev.data});
-      } catch {
-        const parsed = parseMissionString(ev.data);
-        if (parsed) applyMission(parsed);
-      }
+      }catch(_e){}
     };
-  } catch {
-    ui.dbgServer.textContent = 'WS not available';
+  }catch(_e){
+    wsOk = false;
+    ui.dbgServer.textContent = 'Endpoint: /setMissione • WS n/a (polling)';
   }
 }
-connectWS();
 
+async function poll(){
+  if (wsOk) return;
+  try{
+    const r = await fetch('/checkMissione', {cache:'no-store'});
+    const j = await r.json();
+    const m = j && j.mission;
+    if (m && m.seq && m.seq > mission.lastSeq){
+      applyMission({...m, raw: `${m.scaffale}-${m.posto}-${m.livello}-${m.missione}`});
+    }
+  }catch(_e){}
+}
+
+startWS();
+setInterval(poll, 1000);
+
+// Drawing
 function drawCrossAisle(yCenter, label){
   const leftEdge = aisleCenterX(1) - (MAP.laneWidth/2 + MAP.shelfDepth + 40);
   const rightEdge = aisleCenterX(MAP.corridors) + (MAP.laneWidth/2 + MAP.shelfDepth + 40);
@@ -294,16 +306,19 @@ function draw(){
   ctx.fillStyle = '#f6f6f6';
   ctx.fillRect(0,0,cv.width,cv.height);
   drawWarehouse();
+
   if (target.active){
     ctx.save();
     ctx.globalAlpha = 0.9; ctx.fillStyle = '#1a7f37';
     ctx.beginPath(); ctx.arc(target.x, target.y, 8, 0, Math.PI*2); ctx.fill();
     ctx.restore();
+
     const sx = target.x + shelfOffsetX(target.side);
     ctx.save();
     ctx.strokeStyle = '#1a7f37'; ctx.lineWidth = 3;
     ctx.strokeRect(sx - MAP.shelfDepth/2, target.y - 12, MAP.shelfDepth, 24);
     ctx.restore();
+
     const yCross = chooseCrossYForTarget();
     ctx.save();
     ctx.strokeStyle = '#1a7f37';
@@ -311,6 +326,7 @@ function draw(){
     ctx.beginPath(); ctx.moveTo(target.x, yCross); ctx.lineTo(target.x, target.y); ctx.stroke();
     ctx.restore();
   }
+
   drawTrolley();
 }
 
@@ -367,3 +383,71 @@ function tick(ts){
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
+
+
+// -----------------------
+// Simulatore missioni (UI)
+// -----------------------
+const sim = {
+  missionText: document.getElementById('missionText'),
+  btnSend: document.getElementById('btnSendMission'),
+  btnQ1: document.getElementById('btnQuick1'),
+  btnQ2: document.getElementById('btnQuick2'),
+  btnQ3: document.getElementById('btnQuick3'),
+  status: document.getElementById('missionSendStatus'),
+};
+
+function setSimStatus(msg){
+  if (sim.status) sim.status.textContent = msg;
+}
+
+async function sendMissionText(text){
+  const raw = String(text || '').trim();
+  if (!raw){
+    setSimStatus('Inserisci una missione tipo 4-12-1-2');
+    return;
+  }
+  setSimStatus('Invio...');
+  try{
+    const r = await fetch('/setMissione', {
+      method: 'POST',
+      headers: {'Content-Type':'text/plain'},
+      body: raw
+    });
+    const j = await r.json().catch(()=>null);
+    if (!r.ok){
+      setSimStatus(`Errore ${r.status}: ${(j && j.error) ? j.error : 'payload non valido'}`);
+      return;
+    }
+    const m = j && j.mission;
+    if (m && m.scaffale){
+      applyMission({...m, raw});
+      setSimStatus(`OK: ${raw}`);
+    } else {
+      const parsed = parseMissionString(raw);
+      if (parsed) applyMission(parsed);
+      setSimStatus(`OK: ${raw}`);
+    }
+  }catch(_e){
+    const parsed = parseMissionString(raw);
+    if (parsed){
+      applyMission(parsed);
+      setSimStatus(`Offline: applicata localmente (${raw})`);
+    } else {
+      setSimStatus('Offline e formato non valido.');
+    }
+  }
+}
+
+if (sim.btnSend){
+  sim.btnSend.addEventListener('click', () => sendMissionText(sim.missionText ? sim.missionText.value : ''));
+}
+if (sim.missionText){
+  sim.missionText.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') sendMissionText(sim.missionText.value);
+  });
+}
+if (sim.btnQ1) sim.btnQ1.addEventListener('click', () => { if (sim.missionText) sim.missionText.value='4-12-1-1'; sendMissionText('4-12-1-1'); });
+if (sim.btnQ2) sim.btnQ2.addEventListener('click', () => { if (sim.missionText) sim.missionText.value='4-12-1-2'; sendMissionText('4-12-1-2'); });
+if (sim.btnQ3) sim.btnQ3.addEventListener('click', () => { if (sim.missionText) sim.missionText.value='4-12-1-3'; sendMissionText('4-12-1-3'); });
+
