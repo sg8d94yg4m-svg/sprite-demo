@@ -1,25 +1,32 @@
-# VNA sprite demo (2D)
+# VNA sprite demo (2D) + Missioni via REST/WS
 
-Apri `index.html` in un browser.
+## Avvio (consigliato anche per iPhone)
+Avvia il server:
+```bash
+python3 server.py
+```
 
-## Doppia cross-aisle (implementato)
-- **Cross-aisle in testata (alta)**: sopra il posto 1
-- **Cross-aisle bassa**: sotto il posto 20
+Apri:
+- PC: http://localhost:8080/
+- iPhone (stessa Wi‑Fi): http://IP_DEL_PC:8080/
 
-### Regola di scelta cross-aisle (come richiesto)
-- Se il target è **sopra la metà** (posti 1–10) → usa **asse bassa**
-- Se il target è **sotto la metà** (posti 11–20) → usa **asse in testata**
+## Missioni (per ora: passivo)
+Formato: scaffale-posto-livello-missione (missione 1..3)
+- 1 prelievo bancale
+- 2 deposito bancale (futuro: solo se il carrello ha già un bancale)
+- 3 picking (futuro: affiancamento cabina con offset in base al verso di entrata)
 
-## Mapping corridoi ↔ scaffali
-- Corridoio 1 → Scaffale 1 (SX) e 2 (DX)
-- Corridoio 2 → Scaffale 3 (SX) e 4 (DX)
-- ...
-- Corridoio 6 → Scaffale 11 (SX) e 12 (DX)
+### Invia via REST
+JSON:
+```bash
+curl -X POST http://localhost:8080/mission -H "Content-Type: application/json" \
+  -d '{"scaffale":4,"posto":12,"livello":1,"missione":2}'
+```
+Stringa:
+```bash
+curl -X POST http://localhost:8080/mission -H "Content-Type: text/plain" -d "4-12-1-2"
+```
 
-Lo **Scaffale** determina automaticamente:
-- Corridoio = ceil(Scaffale/2)
-- Lato = dispari→SX, pari→DX
-
-## Assets
-- `assets/truck_base.png` : sprite top-down del carrello.
-- `assets/fork.png` : sprite forche (overlay) ruotabile DX/SX.
+## Note
+- Carrello rallentato di 1,5x.
+- Pre-stoccaggi in testata: 1 per corsia, solo livello 1 (a terra), per ora solo disegnati.
